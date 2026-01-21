@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions --- //
+
+    // Check if user is signed in
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the user is the specific Admin
+    function isAdmin() {
+      return request.auth.token.email == 'jabu04753@gmail.com';
+    }
+
+    // Check if the user is the author of the document
+    function isAuthor(authorId) {
+      return request.auth.uid == authorId;
+    }
+
+    // --- Collection Rules --- //
+
+    // 1. Posts Collection
+    match /posts/{postId} {
+      // Read: Public for authenticated users
+      allow read: if isAuthenticated();
+
+      // Create: Users can create posts if they own the data and strictly initialize stats
+      allow create: if isAuthenticated() 
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.karma == 0
+                    && request.resource.data.commentCount == 0
+                    && request.resource.data.isShadowBanned == false
+                    && request.resource.data.isFlagged == false;
+
+      // Update: Complex logic to separate Author vs Community actions
+      allow update: if isAuthenticated() && (
+        // Case A: Admin can do anything
+        isAdmin() || 
+        
+        // Case B: Author can edit their own content (Title/Body)
+        isAuthor(resource.data.authorId) ||
+
+        // Case C: Community Interactions (Votes, Comments, Reports)
+        // Users can ONLY update specific "stat" fields, they CANNOT change content/metadata.
+        (!request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['content', 'title', 'authorId', 'authorName', 'timestamp', 'channelId', 'anonymousId', 'isShadowBanned']))
+      );
+
+      // Delete: Only Admin or Author can delete
+      allow delete: if isAdmin() || isAuthor(resource.data.authorId);
+
+      // 1.1 Comments Sub-collection
+      match /comments/{commentId} {
+        allow read: if isAuthenticated();
+        // Create: Must match auth ID
+        allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
+        // Delete: Admin or Author of the comment
+        allow delete: if isAdmin() || isAuthor(resource.data.authorId);
+      }
+    }
+
+    // 2. User Votes (Prevents Double Voting)
+    match /userVotes/{voteId} {
+      allow read: if isAuthenticated();
+      // Write/Delete: Users can only manage their own vote records
+      // We assume the voteId or the data contains the userId to verify against auth.uid
+      allow write: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 3. Reports (Moderation)
+    match /reports/{reportId} {
+      // Create: Anyone can file a report
+      allow create: if isAuthenticated();
+      
+      // Read/Update/Delete: STRICTLY Admin only
+      allow read, update, delete: if isAdmin();
+    }
+
+    // 4. Users (Profiles)
+    match /users/{userId} {
+      // Read: Any authenticated user can read profiles (needed to see names/karma)
+      allow read: if isAuthenticated();
+      
+      // Write: Users can only create/update their own profile
+      allow write: if isAuthor(userId);
+    }
+
+    // 5. Usernames (Unique Registry)
+    match /usernames/{username} {
+      // Read: Publicly readable to check availability
+      allow read: if isAuthenticated();
+      
+      // Create: Allow if the document ID matches the username and the uid field matches the auth user
+      // Update/Delete: Prevent unexpected changes to claimed usernames
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow delete: if isAdmin(); // Only admins should clear usernames manually if needed
+    }
+  }
+}

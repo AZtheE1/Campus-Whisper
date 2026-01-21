@@ -15,5 +15,8 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+import { getDatabase } from 'firebase/database';
 export const db = getFirestore(app);
+// Initialize Realtime Database with specific regional URL
+export const rtdb = getDatabase(app, "https://campus-wishper-default-rtdb.asia-southeast1.firebasedatabase.app/");
 export const analytics = getAnalytics(app);

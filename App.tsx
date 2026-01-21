@@ -1,54 +1,50 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
-import { User, View, Post, Comment } from './types';
+import React, { useState, useEffect } from 'react';
+import { User, View } from './types';
 import Layout from './components/Layout';
 import Auth from './components/Auth';
-import PostCard from './components/PostCard';
-import { Plus, Send, X, AlertCircle, Edit3, Save, Book, Info, Moon, Sun, ChevronRight, Hash, ShieldCheck } from 'lucide-react';
+import { Plus, Send, X, AlertCircle } from 'lucide-react';
 import { CHANNELS } from './constants';
-import { getStoredPosts, savePost, updatePostKarma, getStoredComments, saveComment, updateUser } from './services/mockBackend';
-import { moderateContent } from './services/geminiService';
 import { db, auth } from './services/firebase';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { createPost, getLivePosts } from './services/postService';
+import { onAuthStateChanged } from 'firebase/auth';
+import { createPost } from './services/postService';
+import { getUserProfile, updateUserProfile } from './services/authService';
 
+// Import Pages
 import Admin from './components/Admin';
 import Feed from './components/Feed';
+import ChannelsPage from './components/ChannelsPage';
+import ProfilePage from './components/ProfilePage';
+import PostDetailPage from './components/PostDetailPage';
 
 const App: React.FC = () => {
+  // Global State
   const [user, setUser] = useState<User | null>(null);
   const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
 
+  // Navigation State
   const [view, setView] = useState<View>('home');
-
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isCreating, setIsCreating] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [currentChannelId, setCurrentChannelId] = useState('cse');
 
-  // New Post Form State
+  // Create Post State
+  const [isCreating, setIsCreating] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const [newChannel, setNewChannel] = useState('cse');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [moderationError, setModerationError] = useState<string | null>(null);
 
+  // Theme State
+  const [isDarkMode, setIsDarkMode] = useState(true);
+
+  // --- Auth & Init Effects ---
   useEffect(() => {
-    // Local storage user (Student Identity)
-    const saved = localStorage.getItem('cw_user');
-    if (saved) setUser(JSON.parse(saved));
+    // 1. Load Local Storage
+    const savedUser = localStorage.getItem('cw_user');
+    if (savedUser) setUser(JSON.parse(savedUser));
 
-    // Firebase Auth (Anonymous Session)
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      if (u) {
-        setFirebaseUid(u.uid);
-      } else {
-        signInAnonymously(auth).catch(console.error);
-      }
-    });
-
-    // Theme
+    // 2. Load Theme
     const savedTheme = localStorage.getItem('cw_theme');
     const root = document.documentElement;
     if (savedTheme === 'light') {
@@ -59,107 +55,148 @@ const App: React.FC = () => {
       root.classList.add('dark');
     }
 
-    return () => unsubscribeAuth();
+    // 3. Firebase Auth Listener
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+      if (u) {
+        setFirebaseUid(u.uid);
+        try {
+          const profile = await getUserProfile(u.uid);
+          if (profile) {
+            setUser(profile);
+            localStorage.setItem('cw_user', JSON.stringify(profile));
+          }
+        } catch (err) {
+          console.error("Profile sync failed", err);
+        }
+      } else {
+        setFirebaseUid(null);
+        setUser(null);
+        localStorage.removeItem('cw_user');
+      }
+      setAuthInitialized(true);
+    });
+
+    return () => unsubscribe();
   }, []);
 
+  // --- Handlers ---
 
-
-  const handleNavigate = (v: View) => {
-    setView(v);
+  const handleNavigate = (newView: View) => {
+    setView(newView);
     setSelectedPostId(null);
   };
 
+  const toggleTheme = () => {
+    const newMode = !isDarkMode;
+    setIsDarkMode(newMode);
+    localStorage.setItem('cw_theme', newMode ? 'dark' : 'light');
+    const root = document.documentElement;
+    if (newMode) root.classList.add('dark');
+    else root.classList.remove('dark');
+  };
 
+  const handleUpdateUser = async (updatedUser: User) => {
+    setUser(updatedUser);
+    localStorage.setItem('cw_user', JSON.stringify(updatedUser));
+    if (firebaseUid) {
+      await updateUserProfile(firebaseUid, updatedUser).catch(console.error);
+    }
+  };
 
   const handleCreatePost = async () => {
-    if (!user || !newContent.trim()) return;
-
-    // Ensure Firebase Auth is ready
     if (!auth.currentUser) {
-      // Try one last time or wait
-      try {
-        await signInAnonymously(auth);
-      } catch (e) {
-        alert("Authentication failed. Please check your connection.");
-        return;
-      }
+      alert("Please log in to post.");
+      return;
     }
+    if (!newContent.trim()) return;
 
     setIsSubmitting(true);
     setModerationError(null);
 
     try {
-      // API call now handles moderation
       await createPost(newContent, newChannel);
-
       setIsCreating(false);
       setNewTitle('');
       setNewContent('');
+      // If we posted to a channel, maybe switch to it? 
+      // For now, staying on current view.
     } catch (e: any) {
-      if (e.message.includes("Community Guidelines")) {
+      if (e.message && e.message.includes("Community Guidelines")) {
         setModerationError(e.message);
       } else {
-        alert("Failed to post: " + (e.message || "Unknown error"));
+        alert("Error creating post: " + e.message);
       }
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
-  const handleUpdateUser = (updatedUser: User) => {
-    setUser(updatedUser);
-    updateUser(updatedUser);
-  };
+  // --- Render Logic ---
 
-  if (!user) {
+  if (!user && authInitialized) {
     return <Auth onAuthSuccess={setUser} />;
   }
 
-  const selectedPost = posts.find(p => p.id === selectedPostId);
-  const isProfileView = view === 'profile';
-  const isAdminView = view === 'admin';
+  // Loading state (optional, but good for UX)
+  if (!user && !authInitialized) {
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400">Loading Campus...</div>;
+  }
+
+  // --- View Switcher ---
+  let content;
+
+  if (selectedPostId) {
+    content = (
+      <PostDetailPage
+        postId={selectedPostId}
+        onBack={() => setSelectedPostId(null)}
+        user={user!}
+        firebaseUid={firebaseUid}
+      />
+    );
+  } else if (view === 'admin') {
+    content = <Admin userEmail={user?.email || null} />;
+  } else if (view === 'channels') {
+    content = (
+      <ChannelsPage
+        onSelectChannel={(id) => {
+          setCurrentChannelId(id);
+          handleNavigate('home');
+        }}
+      />
+    );
+  } else if (view === 'profile') {
+    content = (
+      <ProfilePage
+        user={user!}
+        isDarkMode={isDarkMode}
+        onToggleTheme={toggleTheme}
+        onUpdateUser={handleUpdateUser}
+        onLogout={() => auth.signOut()}
+      />
+    );
+  } else {
+    // Default: Feed (Home or My Posts)
+    content = (
+      <Feed
+        key={currentChannelId} // Force re-render on channel switch
+        view={view}
+        user={user!}
+        searchQuery={''} // Search state can be lifted if needed
+        channelId={currentChannelId}
+        setChannelId={setCurrentChannelId}
+        onPostClick={(id) => setSelectedPostId(id)}
+        firebaseUid={firebaseUid}
+      />
+    );
+  }
 
   return (
-    <Layout currentView={view} onNavigate={handleNavigate} onSearch={setSearchQuery}>
+    <Layout currentView={view} onNavigate={handleNavigate} onSearch={(q) => console.log(q)}>
+      {content}
 
-      <div className="flex flex-col py-2 transition-colors duration-300">
-        {selectedPostId && selectedPost ? (
-          <PostDetailPage
-            post={selectedPost}
-            onBack={() => setSelectedPostId(null)}
-            user={user}
-            onVote={(id, v) => console.log('Vote:', id, v)}
-          />
-        ) : isAdminView ? (
-          <Admin userEmail={auth.currentUser?.email || null} />
-        ) : view === 'channels' ? (
-          <ChannelsPage
-            onSelectChannel={(id) => {
-              setNewChannel(id);
-              setView('home');
-            }}
-          />
-        ) : view === 'profile' ? (
-          <ProfilePage
-            user={user}
-            isDarkMode={isDarkMode}
-            onToggleTheme={toggleTheme}
-            onUpdateUser={handleUpdateUser}
-            onLogout={() => { localStorage.clear(); setUser(null); }}
-          />
-        ) : (
-          <Feed
-            view={view}
-            user={user}
-            searchQuery={searchQuery}
-            channelId={newChannel}
-            setChannelId={setNewChannel}
-            onPostClick={(id) => setSelectedPostId(id)}
-            firebaseUid={firebaseUid}
-          />
-        )}
-      </div>
-
-      {!isProfileView && !selectedPostId && (
+      {/* Floating Action Button (Only show on Feed) */}
+      {!selectedPostId && view !== 'profile' && view !== 'admin' && (
         <button
           onClick={() => setIsCreating(true)}
           className="fixed bottom-24 right-6 w-14 h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl flex items-center justify-center shadow-xl shadow-indigo-500/30 z-50 transition-all active:scale-90 animate-in fade-in zoom-in duration-300"
@@ -168,6 +205,7 @@ const App: React.FC = () => {
         </button>
       )}
 
+      {/* Create Post Modal */}
       {isCreating && (
         <div className="fixed inset-0 z-[100] bg-white dark:bg-slate-950 flex flex-col max-w-lg mx-auto border-x border-slate-200 dark:border-slate-800 animate-in slide-in-from-bottom duration-300">
           <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800/50">
@@ -230,297 +268,5 @@ const App: React.FC = () => {
     </Layout>
   );
 };
-
-// Pages as Helper Components
-
-const PostDetailPage: React.FC<{ post: Post; onBack: () => void; onVote: (id: string, v: 'up' | 'down') => void; user: User }> = ({
-  post, onBack, onVote, user
-}) => {
-  const [comments, setComments] = useState(getStoredComments(post.id));
-  const [newComment, setNewComment] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleSubmitComment = async () => {
-    if (!newComment.trim()) return;
-    setIsSubmitting(true);
-
-    const mod = await moderateContent(newComment);
-    if (!mod.isSafe) {
-      alert(mod.reason);
-      setIsSubmitting(false);
-      return;
-    }
-
-    const c: Comment = {
-      id: Math.random().toString(36).substr(2, 9),
-      postId: post.id,
-      authorId: user.id,
-      authorName: user.username,
-      content: newComment,
-      karma: 1,
-      timestamp: Date.now(),
-      userVote: 'up'
-    };
-
-    saveComment(c);
-    setComments(getStoredComments(post.id));
-    setNewComment('');
-    setIsSubmitting(false);
-  };
-
-  return (
-    <div className="flex flex-col min-h-screen bg-white dark:bg-slate-950 transition-colors animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="sticky top-16 z-30 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md p-3 border-b border-slate-50 dark:border-slate-900 flex items-center">
-        <button onClick={onBack} className="text-indigo-600 dark:text-indigo-400 text-xs font-black px-3 py-1.5 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center gap-1 active:scale-95 transition-all">
-          <ChevronRight className="rotate-180" size={14} /> Back
-        </button>
-      </div>
-      <PostCard post={post} onVote={onVote} onClick={() => { }} />
-
-      <div className="p-4 border-b border-slate-50 dark:border-slate-900 bg-slate-50/30 dark:bg-slate-900/10">
-        <h4 className="text-[10px] font-black text-slate-400 dark:text-slate-600 uppercase tracking-[0.2em] mb-6 px-4">Thread Comments</h4>
-        <div className="space-y-6">
-          {comments.map(c => (
-            <div key={c.id} className="mx-4 pl-4 border-l-2 border-indigo-500/20 dark:border-slate-800 animate-in slide-in-from-left duration-300">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">{c.authorName}</span>
-                <span className="text-[10px] font-medium text-slate-300 dark:text-slate-700">Just now</span>
-              </div>
-              <p className="text-sm text-slate-700 dark:text-slate-300 mb-3 leading-relaxed">{c.content}</p>
-              <div className="flex items-center gap-4 text-[10px] font-black text-slate-400 dark:text-slate-600 uppercase tracking-tighter">
-                <button className="hover:text-indigo-500 transition-colors">Upvote</button>
-                <button className="hover:text-indigo-500 transition-colors">Reply</button>
-                <span className="ml-auto bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">{c.karma} karma</span>
-              </div>
-            </div>
-          ))}
-        </div>
-        {comments.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-slate-300 dark:text-slate-700 text-sm italic font-medium">Be the first to whisper a response.</p>
-          </div>
-        )}
-      </div>
-
-      <div className="sticky bottom-20 p-4 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-50 dark:border-slate-900 flex gap-3 items-end">
-        <textarea
-          placeholder="Add a comment..."
-          className="flex-grow bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none max-h-32 text-slate-800 dark:text-slate-200 transition-all"
-          rows={1}
-          value={newComment}
-          onChange={(e) => setNewComment(e.target.value)}
-        />
-        <button
-          onClick={handleSubmitComment}
-          disabled={!newComment.trim() || isSubmitting}
-          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white p-4 rounded-2xl transition-all shadow-lg shadow-indigo-500/20 active:scale-90"
-        >
-          <Send size={18} />
-        </button>
-      </div>
-    </div>
-  );
-};
-
-const ChannelsPage: React.FC<{ onSelectChannel: (id: string) => void }> = ({ onSelectChannel }) => (
-  <div className="p-4 bg-slate-50 dark:bg-slate-950 min-h-screen transition-colors animate-in fade-in duration-500">
-    <div className="flex items-center justify-between mb-8 px-2">
-      <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">University Hub</h2>
-      <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 dark:bg-indigo-500/10 px-3 py-1.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 uppercase tracking-[0.1em]">{CHANNELS.length} Active Depts</span>
-    </div>
-    <div className="grid gap-4">
-      {CHANNELS.map(c => (
-        <div key={c.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/50 p-5 rounded-2xl flex items-center justify-between shadow-sm hover:border-indigo-400 dark:hover:border-indigo-500 transition-all group active:scale-[0.99]">
-          <div className="flex-1 pr-4">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 rounded-xl bg-slate-50 dark:bg-slate-800 flex items-center justify-center group-hover:bg-indigo-600 transition-colors">
-                <Hash size={16} className="text-indigo-500 group-hover:text-white" />
-              </div>
-              <h3 className="font-black text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{c.name}</h3>
-            </div>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500 font-bold mb-2 uppercase tracking-tight">{c.fullName}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-500 line-clamp-1 italic leading-relaxed font-medium">"{c.description}"</p>
-          </div>
-          <button
-            onClick={() => onSelectChannel(c.id)}
-            className="bg-slate-50 dark:bg-slate-800/80 hover:bg-indigo-600 hover:text-white dark:hover:bg-indigo-600 px-5 py-2.5 rounded-xl text-xs font-black transition-all text-slate-700 dark:text-slate-300 border border-slate-100 dark:border-slate-800 group-hover:shadow-lg group-hover:shadow-indigo-500/20">
-            View Feed
-          </button>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const ProfilePage: React.FC<{
-  user: User;
-  isDarkMode: boolean;
-  onToggleTheme: () => void;
-  onUpdateUser: (u: User) => void;
-  onLogout: () => void
-}> = ({ user, isDarkMode, onToggleTheme, onUpdateUser, onLogout }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editGender, setEditGender] = useState(user.gender || '');
-  const [editMajor, setEditMajor] = useState(user.major || '');
-  const [editBio, setEditBio] = useState(user.bio || '');
-
-  const handleSave = () => {
-    onUpdateUser({
-      ...user,
-      gender: editGender,
-      major: editMajor,
-      bio: editBio
-    });
-    setIsEditing(false);
-  };
-
-  if (isEditing) {
-    return (
-      <div className="p-6 space-y-6 bg-white dark:bg-slate-950 min-h-screen animate-in fade-in slide-in-from-bottom-4 duration-500 transition-colors">
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Identity Settings</h2>
-          <button onClick={() => setIsEditing(false)} className="text-slate-300 hover:text-slate-600 p-2 bg-slate-50 dark:bg-slate-900 rounded-xl transition-all">
-            <X size={24} />
-          </button>
-        </div>
-
-        <div className="space-y-6">
-          <div>
-            <label className="text-[10px] font-black text-slate-400 dark:text-slate-600 uppercase mb-3 block tracking-[0.2em]">Gender Preference</label>
-            <div className="grid grid-cols-2 gap-3">
-              {['Male', 'Female', 'Non-binary', 'Other'].map(g => (
-                <button
-                  key={g}
-                  onClick={() => setEditGender(g)}
-                  className={`py-4 rounded-2xl text-xs font-black border transition-all ${editGender === g ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-500/20' : 'bg-slate-50 dark:bg-slate-900/50 border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-slate-300'}`}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-black text-slate-400 dark:text-slate-600 uppercase mb-3 block tracking-[0.2em]">Primary Major</label>
-            <div className="relative group">
-              <Book className="absolute left-4 top-4 text-slate-300 dark:text-slate-700 group-focus-within:text-indigo-500 transition-colors" size={20} />
-              <input
-                type="text"
-                placeholder="e.g. Physics"
-                value={editMajor}
-                onChange={(e) => setEditMajor(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl py-4 pl-12 pr-4 text-sm font-bold focus:ring-2 focus:ring-indigo-500/20 outline-none text-slate-900 dark:text-white transition-all"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-black text-slate-400 dark:text-slate-600 uppercase mb-3 block tracking-[0.2em]">Secret Bio</label>
-            <div className="relative group">
-              <Info className="absolute left-4 top-4 text-slate-300 dark:text-slate-700 group-focus-within:text-indigo-500 transition-colors" size={20} />
-              <textarea
-                placeholder="Share something about yourself anonymously..."
-                value={editBio}
-                onChange={(e) => setEditBio(e.target.value)}
-                rows={3}
-                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl py-4 pl-12 pr-4 text-sm font-bold focus:ring-2 focus:ring-indigo-500/20 outline-none resize-none text-slate-900 dark:text-white transition-all"
-              />
-            </div>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-5 rounded-3xl shadow-2xl shadow-indigo-500/20 flex items-center justify-center gap-3 transition-all active:scale-95"
-        >
-          <Save size={20} />
-          Save Identity
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-6 bg-white dark:bg-slate-950 min-h-screen transition-colors duration-500 animate-in fade-in duration-500">
-      <div className="flex flex-col items-center text-center mb-10 mt-4 animate-in zoom-in duration-700">
-        <div className="w-28 h-28 rounded-[32px] bg-gradient-to-br from-indigo-600 to-slate-800 flex items-center justify-center text-4xl font-black mb-6 shadow-2xl shadow-indigo-500/30 text-white transform hover:rotate-6 transition-transform">
-          {user.username.substring(0, 2).toUpperCase()}
-        </div>
-        <h2 className="text-3xl font-black text-slate-900 dark:text-white mb-3 tracking-tight">{user.username}</h2>
-        <div className="flex flex-wrap justify-center gap-3 mt-1">
-          {user.gender && <span className="bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase px-3 py-1 rounded-xl border border-indigo-100 dark:border-indigo-500/20">{user.gender}</span>}
-          {user.major && <span className="bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase px-3 py-1 rounded-xl border border-emerald-100 dark:border-emerald-500/20">{user.major}</span>}
-        </div>
-        {user.bio && <p className="text-slate-500 dark:text-slate-400 text-sm mt-6 italic max-w-xs leading-relaxed font-medium px-4 opacity-80">"{user.bio}"</p>}
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mb-10">
-        <div className="bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 p-5 rounded-3xl text-center shadow-sm">
-          <div className="text-3xl font-black text-indigo-600 dark:text-indigo-400 mb-1">{user.karma}</div>
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-600">Total Karma</div>
-        </div>
-        <div className="bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 p-5 rounded-3xl text-center shadow-sm">
-          <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400 mb-1">Top 5%</div>
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-600">Global Rank</div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        {/* Toggle - Fixed UI transition between Day (White) and Night (Navy/Slate) */}
-        <button
-          onClick={onToggleTheme}
-          className="w-full bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-800 p-5 rounded-3xl text-left font-black text-sm transition-all flex items-center justify-between group active:scale-[0.99]"
-        >
-          <div className="flex items-center gap-4 text-slate-700 dark:text-slate-300">
-            <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-800 flex items-center justify-center shadow-sm transition-colors">
-              {isDarkMode ? <Moon size={20} className="text-indigo-400" /> : <Sun size={20} className="text-orange-500" />}
-            </div>
-            <span>{isDarkMode ? 'Night Mode' : 'Day Mode'}</span>
-          </div>
-          <div className={`w-14 h-8 rounded-full p-1.5 transition-colors duration-500 ${isDarkMode ? 'bg-indigo-600' : 'bg-slate-200'}`}>
-            <div className={`w-5 h-5 bg-white rounded-full transition-transform duration-500 transform ${isDarkMode ? 'translate-x-6' : 'translate-x-0 shadow-md'}`} />
-          </div>
-        </button>
-
-        <button
-          onClick={() => setIsEditing(true)}
-          className="w-full bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-800 p-5 rounded-3xl text-left font-black text-sm transition-all flex items-center justify-between group active:scale-[0.99]"
-        >
-          <div className="flex items-center gap-4 text-slate-700 dark:text-slate-300">
-            <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-800 flex items-center justify-center shadow-sm">
-              <Edit3 size={18} className="text-indigo-600" />
-            </div>
-            <span>Identity Details</span>
-          </div>
-          <ChevronRight size={18} className="text-slate-300 dark:text-slate-700 group-hover:translate-x-1 transition-transform" />
-        </button>
-
-        <button className="w-full bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-800 p-5 rounded-3xl text-left font-black text-sm transition-all flex items-center gap-4 text-slate-700 dark:text-slate-300 active:scale-[0.99]">
-          <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-800 flex items-center justify-center shadow-sm">
-            <ShieldCheck className="text-emerald-500" size={18} />
-          </div>
-          Guidelines & Privacy
-        </button>
-
-        <button
-          onClick={onLogout}
-          className="w-full bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 border border-red-100 dark:border-red-500/20 p-5 rounded-3xl text-left font-black text-sm text-red-600 dark:text-red-500 transition-all flex items-center gap-4 active:scale-[0.99]"
-        >
-          <div className="w-10 h-10 rounded-2xl bg-white dark:bg-red-500/10 flex items-center justify-center shadow-sm">
-            <X size={18} />
-          </div>
-          Discard Current Identity
-        </button>
-      </div>
-
-      <div className="mt-16 text-center">
-        <p className="text-[10px] text-slate-300 dark:text-slate-700 uppercase font-black tracking-[0.4em]">Campus Whisper v1.2.0</p>
-        <p className="text-[8px] text-slate-200 dark:text-slate-800 font-bold mt-2 uppercase">Verified University Node</p>
-      </div>
-    </div>
-  );
-};
-
-
 
 export default App;

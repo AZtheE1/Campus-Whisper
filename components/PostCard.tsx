@@ -62,6 +62,7 @@ const PostCard: React.FC<PostCardProps> = ({ post, onClick, firebaseUid }) => {
           <VoteButtons
             postId={post.id}
             initialKarma={post.karma}
+            initialUserVote={post.userVote}
             userId={firebaseUid}
           />
 

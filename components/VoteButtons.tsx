@@ -1,18 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowBigUp, ArrowBigDown } from 'lucide-react';
 import { upvotePost, downvotePost } from '../services/postService';
 
 interface VoteButtonsProps {
     postId: string;
     initialKarma: number;
+    initialUserVote?: 'up' | 'down' | null;
     userId: string | null;
     onVoteError?: (error: string) => void;
 }
 
-const VoteButtons: React.FC<VoteButtonsProps> = ({ postId, initialKarma, userId, onVoteError }) => {
+const VoteButtons: React.FC<VoteButtonsProps> = ({ postId, initialKarma, initialUserVote, userId, onVoteError }) => {
     const [optimisticKarma, setOptimisticKarma] = useState(initialKarma);
-    const [userVote, setUserVote] = useState<'up' | 'down' | null>(null);
+    const [userVote, setUserVote] = useState<'up' | 'down' | null>(initialUserVote || null);
     const [isVoting, setIsVoting] = useState(false);
+
+    // Sync with server updates
+    useEffect(() => {
+        setOptimisticKarma(initialKarma);
+    }, [initialKarma]);
+
+    useEffect(() => {
+        setUserVote(initialUserVote || null);
+    }, [initialUserVote]);
 
     const handleVote = async (type: 'up' | 'down') => {
         if (!userId || isVoting) return;
