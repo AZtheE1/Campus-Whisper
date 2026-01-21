@@ -1,9 +1,18 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Initialize lazily to avoid immediate crash if key is missing
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 export async function moderateContent(content: string): Promise<{ isSafe: boolean; reason?: string }> {
+  // 1. Fallback: If no API key, bypass moderation (allow post)
+  if (!ai || !apiKey) {
+    console.warn("⚠️ Gemini API Key missing - Moderation skipped.");
+    return { isSafe: true };
+  }
+
   try {
     const response = await ai.models.generateContent({
       model: "gemini-1.5-flash",
@@ -30,8 +39,8 @@ export async function moderateContent(content: string): Promise<{ isSafe: boolea
 
     return { isSafe: true };
   } catch (error) {
-    console.error("Moderation error:", error);
-    // Fail safe: in case of API error, allow but log.
+    console.warn("⚠️ Moderation API error - Failing open (allowing post):", error);
+    // 2. Fallback: On API error (quota, network, etc), allow post
     return { isSafe: true };
   }
 }
