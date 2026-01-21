@@ -1,0 +1,5 @@
+{
+  "name": "Campus Whisper",
+  "description": "An anonymous social forum for university students with AI-powered moderation and karma-based ranking.",
+  "requestFramePermissions": []
+}
