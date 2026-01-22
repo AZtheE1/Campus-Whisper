@@ -180,7 +180,7 @@ export const getLiveComments = (postId: string, callback: (comments: Comment[]) 
     );
 
     return onSnapshot(q, (snapshot) => {
-        console.log(`📡 Streamed ${snapshot.docs.length} comments for post ${postId}`);
+
         const comments = snapshot.docs.map(doc => ({
             id: doc.id,
             postId,

@@ -192,7 +192,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <Layout currentView={view} onNavigate={handleNavigate} onSearch={(q) => console.log(q)}>
+    <Layout currentView={view} onNavigate={handleNavigate} onSearch={() => { }}>
       {content}
 
       {/* Floating Action Button (Only show on Feed) */}

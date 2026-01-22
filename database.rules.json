@@ -1,0 +1,16 @@
+{
+    "rules": {
+        "presence": {
+            "$channelId": {
+                "$uid": {
+                    // Users can read anyone's presence
+                    ".read": "auth != null",
+                    // Users can only write their OWN presence (uid matches)
+                    ".write": "auth != null && $uid === auth.uid",
+                    // Validate structure
+                    ".validate": "newData.hasChildren(['nickname', 'status', 'enteredAt'])"
+                }
+            }
+        }
+    }
+}
