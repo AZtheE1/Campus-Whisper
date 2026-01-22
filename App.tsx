@@ -15,6 +15,7 @@ import Feed from './components/Feed';
 import ChannelsPage from './components/ChannelsPage';
 import ProfilePage from './components/ProfilePage';
 import PostDetailPage from './components/PostDetailPage';
+import SplashScreen from './components/SplashScreen';
 
 const App: React.FC = () => {
   // Global State
@@ -73,7 +74,8 @@ const App: React.FC = () => {
         setUser(null);
         localStorage.removeItem('cw_user');
       }
-      setAuthInitialized(true);
+      // Artificial delay for splash screen aesthetics
+      setTimeout(() => setAuthInitialized(true), 1500);
     });
 
     return () => unsubscribe();
@@ -133,13 +135,19 @@ const App: React.FC = () => {
 
   // --- Render Logic ---
 
-  if (!user && authInitialized) {
-    return <Auth onAuthSuccess={setUser} />;
+  // Show Splash Screen overlay while initializing
+  if (!authInitialized) {
+    return <SplashScreen isLoading={true} />;
   }
 
-  // Loading state (optional, but good for UX)
-  if (!user && !authInitialized) {
-    return <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400">Loading Campus...</div>;
+  // After init, if no user, show Auth (with Splash exiting)
+  if (!user) {
+    return (
+      <>
+        <SplashScreen isLoading={false} />
+        <Auth onAuthSuccess={setUser} />
+      </>
+    );
   }
 
   // --- View Switcher ---
